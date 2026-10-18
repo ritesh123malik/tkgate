@@ -1,8 +1,10 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Circuit, Gate, Wire, Pin, LogicValue, GateType } from '../types/circuit';
 import { GATE_CATALOG } from '../simulator/definitions';
+import { UiTheme, THEMES } from '../types/theme';
 
 interface CanvasProps {
+  theme: UiTheme;
   circuit: Circuit;
   onUpdateCircuit: (circuit: Circuit) => void;
   selectedGateId: string | null;
@@ -13,9 +15,13 @@ interface CanvasProps {
   onAddProbe: (wireId: string) => void;
   pendingGateType: GateType | null;
   onPlaceGate: (type: GateType, x: number, y: number) => void;
+  onCursorMove?: (pos: { x: number; y: number }) => void;
+  onZoomChange?: (z: number) => void;
+  onOpenProperties?: () => void;
 }
 
 export const Canvas: React.FC<CanvasProps> = ({
+  theme,
   circuit,
   onUpdateCircuit,
   selectedGateId,
@@ -26,11 +32,15 @@ export const Canvas: React.FC<CanvasProps> = ({
   onAddProbe,
   pendingGateType,
   onPlaceGate,
+  onCursorMove,
+  onZoomChange,
+  onOpenProperties,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  
+  const colors = THEMES[theme];
+
   // Viewport transformation
-  const [offset, setOffset] = useState<{ x: number; y: number }>({ x: 40, y: 40 });
+  const [offset, setOffset] = useState<{ x: number; y: number }>({ x: 60, y: 60 });
   const [zoom, setZoom] = useState<number>(1.0);
 
   // Interaction states
@@ -42,6 +52,11 @@ export const Canvas: React.FC<CanvasProps> = ({
   // Wiring states
   const [wiringStart, setWiringStart] = useState<{ gateId: string; pinId: string; x: number; y: number } | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Notify parent of zoom change
+  useEffect(() => {
+    if (onZoomChange) onZoomChange(zoom);
+  }, [zoom, onZoomChange]);
 
   // Convert screen coordinates to canvas world coordinates
   const screenToWorld = useCallback((sx: number, sy: number) => {
@@ -78,20 +93,20 @@ export const Canvas: React.FC<CanvasProps> = ({
     ctx.scale(dpr, dpr);
     ctx.save();
 
-    // Background
-    ctx.fillStyle = '#161922';
+    // Canvas Background
+    ctx.fillStyle = colors.canvasBg;
     ctx.fillRect(0, 0, width, height);
 
     // Apply pan and zoom
     ctx.translate(offset.x, offset.y);
     ctx.scale(zoom, zoom);
 
-    // Grid rendering
+    // Grid rendering (TkGate grid dots)
     const gridSpacing = 20;
     const worldTopLeft = screenToWorld(0, 0);
     const worldBottomRight = screenToWorld(width, height);
 
-    ctx.fillStyle = '#222838';
+    ctx.fillStyle = colors.gridDot;
     const startX = Math.floor(worldTopLeft.x / gridSpacing) * gridSpacing;
     const endX = Math.ceil(worldBottomRight.x / gridSpacing) * gridSpacing;
     const startY = Math.floor(worldTopLeft.y / gridSpacing) * gridSpacing;
@@ -99,11 +114,11 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     for (let x = startX; x <= endX; x += gridSpacing) {
       for (let y = startY; y <= endY; y += gridSpacing) {
-        ctx.fillRect(x - 0.5, y - 0.5, 1.5, 1.5);
+        ctx.fillRect(x - 0.75, y - 0.75, 1.5, 1.5);
       }
     }
 
-    // 1. Draw Wires
+    // 1. Draw Wires with TkGate styling
     for (const wire of circuit.wires) {
       const fromGate = circuit.gates.find(g => g.id === wire.fromGateId);
       const toGate = circuit.gates.find(g => g.id === wire.toGateId);
@@ -117,21 +132,21 @@ export const Canvas: React.FC<CanvasProps> = ({
       const p2 = getPinPos(toGate, toPin);
 
       // Wire state color
-      let color = '#64748b'; // 0
-      if (wire.state === 1) color = '#10b981'; // 1
-      else if (wire.state === 'Z') color = '#f59e0b'; // Z
-      else if (wire.state === 'X') color = '#ef4444'; // X
+      let color = colors.wire0;
+      if (wire.state === 1) color = colors.wire1;
+      else if (wire.state === 'Z') color = colors.wireZ;
+      else if (wire.state === 'X') color = colors.wireX;
 
       const isSelected = selectedWireId === wire.id;
 
       ctx.save();
       ctx.lineWidth = wire.busWidth > 1 ? 3.5 : (isSelected ? 3 : 2);
-      ctx.strokeStyle = isSelected ? '#38bdf8' : color;
+      ctx.strokeStyle = isSelected ? colors.selection : (wire.busWidth > 1 ? colors.bus : color);
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
 
-      if (wire.state === 1) {
-        ctx.shadowColor = '#10b981';
+      if (wire.state === 1 && theme === 'dark') {
+        ctx.shadowColor = colors.wire1;
         ctx.shadowBlur = 4;
       }
 
@@ -147,10 +162,19 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       // Bus indicator
       if (wire.busWidth > 1) {
-        ctx.fillStyle = '#94a3b8';
+        ctx.fillStyle = colors.textSecondary;
         ctx.font = '9px JetBrains Mono, monospace';
         ctx.fillText(`/${wire.busWidth}`, midX + 4, (p1.y + p2.y) / 2);
       }
+
+      // Solder junction dots
+      ctx.fillStyle = isSelected ? colors.selection : color;
+      ctx.beginPath();
+      ctx.arc(p1.x, p1.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(p2.x, p2.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
 
       ctx.restore();
     }
@@ -159,7 +183,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (wiringStart) {
       ctx.save();
       ctx.lineWidth = 2;
-      ctx.strokeStyle = '#38bdf8';
+      ctx.strokeStyle = colors.selection;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
       ctx.moveTo(wiringStart.x, wiringStart.y);
@@ -179,11 +203,13 @@ export const Canvas: React.FC<CanvasProps> = ({
       ctx.save();
       ctx.translate(gate.x, gate.y);
 
-      // Gate background shadow / glow if selected
+      // Selection box
       if (isSelected) {
-        ctx.strokeStyle = '#38bdf8';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(-4, -4, meta.width + 8, meta.height + 8);
+        ctx.strokeStyle = colors.selection;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 2]);
+        ctx.strokeRect(-5, -5, meta.width + 10, meta.height + 10);
+        ctx.setLineDash([]);
       }
 
       // Draw Gate Body according to Type
@@ -196,17 +222,19 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
 
     ctx.restore();
-  }, [circuit, offset, zoom, selectedGateId, selectedWireId, wiringStart, mousePos, getPinPos, screenToWorld]);
+  }, [circuit, offset, zoom, selectedGateId, selectedWireId, wiringStart, mousePos, getPinPos, screenToWorld, theme, colors]);
 
-  // Render Gate Graphics
+  // Render Gate Graphics with authentic logic symbols
   function renderGateBody(ctx: CanvasRenderingContext2D, gate: Gate, meta: any) {
     const { width, height } = meta;
+    const bodyFill = colors.gateBody;
+    const strokeCol = colors.gateBorder;
 
     switch (gate.type) {
       case 'AND':
       case 'NAND': {
-        ctx.fillStyle = '#202636';
-        ctx.strokeStyle = '#94a3b8';
+        ctx.fillStyle = bodyFill;
+        ctx.strokeStyle = strokeCol;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(0, 0);
@@ -220,12 +248,12 @@ export const Canvas: React.FC<CanvasProps> = ({
         if (gate.type === 'NAND') {
           ctx.beginPath();
           ctx.arc(width - 5, height / 2, 4, 0, Math.PI * 2);
-          ctx.fillStyle = '#202636';
+          ctx.fillStyle = bodyFill;
           ctx.fill();
           ctx.stroke();
         }
 
-        ctx.fillStyle = '#94a3b8';
+        ctx.fillStyle = colors.textSecondary;
         ctx.font = '10px JetBrains Mono';
         ctx.textAlign = 'center';
         ctx.fillText(gate.name || '&', width * 0.4, height / 2 + 4);
@@ -234,8 +262,8 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       case 'OR':
       case 'NOR': {
-        ctx.fillStyle = '#202636';
-        ctx.strokeStyle = '#94a3b8';
+        ctx.fillStyle = bodyFill;
+        ctx.strokeStyle = strokeCol;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(0, 0);
@@ -249,12 +277,12 @@ export const Canvas: React.FC<CanvasProps> = ({
         if (gate.type === 'NOR') {
           ctx.beginPath();
           ctx.arc(width - 5, height / 2, 4, 0, Math.PI * 2);
-          ctx.fillStyle = '#202636';
+          ctx.fillStyle = bodyFill;
           ctx.fill();
           ctx.stroke();
         }
 
-        ctx.fillStyle = '#94a3b8';
+        ctx.fillStyle = colors.textSecondary;
         ctx.font = '10px JetBrains Mono';
         ctx.textAlign = 'center';
         ctx.fillText(gate.name || '≥1', width * 0.4, height / 2 + 4);
@@ -263,11 +291,10 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       case 'XOR':
       case 'XNOR': {
-        ctx.fillStyle = '#202636';
-        ctx.strokeStyle = '#94a3b8';
+        ctx.fillStyle = bodyFill;
+        ctx.strokeStyle = strokeCol;
         ctx.lineWidth = 2;
 
-        // Front body
         ctx.beginPath();
         ctx.moveTo(8, 0);
         ctx.quadraticCurveTo(width * 0.35, height / 2, 8, height);
@@ -286,12 +313,12 @@ export const Canvas: React.FC<CanvasProps> = ({
         if (gate.type === 'XNOR') {
           ctx.beginPath();
           ctx.arc(width - 5, height / 2, 4, 0, Math.PI * 2);
-          ctx.fillStyle = '#202636';
+          ctx.fillStyle = bodyFill;
           ctx.fill();
           ctx.stroke();
         }
 
-        ctx.fillStyle = '#94a3b8';
+        ctx.fillStyle = colors.textSecondary;
         ctx.font = '10px JetBrains Mono';
         ctx.textAlign = 'center';
         ctx.fillText(gate.name || '=1', width * 0.45, height / 2 + 4);
@@ -299,8 +326,8 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
 
       case 'NOT': {
-        ctx.fillStyle = '#202636';
-        ctx.strokeStyle = '#94a3b8';
+        ctx.fillStyle = bodyFill;
+        ctx.strokeStyle = strokeCol;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(0, 0);
@@ -313,7 +340,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         // Inversion bubble
         ctx.beginPath();
         ctx.arc(width - 5, height / 2, 4, 0, Math.PI * 2);
-        ctx.fillStyle = '#202636';
+        ctx.fillStyle = bodyFill;
         ctx.fill();
         ctx.stroke();
         break;
@@ -321,8 +348,8 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       case 'BUF':
       case 'TRI': {
-        ctx.fillStyle = '#202636';
-        ctx.strokeStyle = '#94a3b8';
+        ctx.fillStyle = bodyFill;
+        ctx.strokeStyle = strokeCol;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(0, 0);
@@ -336,21 +363,21 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       case 'SWITCH': {
         const isOn = gate.state.val === 1;
-        ctx.fillStyle = '#1e2433';
-        ctx.strokeStyle = '#475569';
-        ctx.lineWidth = 2;
-        ctx.roundRect(0, 0, width, height, 6);
+        ctx.fillStyle = theme === 'classic' ? '#dcdcd6' : '#1e2433';
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1.5;
+        ctx.roundRect(0, 0, width, height, 4);
         ctx.fill();
         ctx.stroke();
 
         // Lever track
-        ctx.fillStyle = '#0f172a';
+        ctx.fillStyle = theme === 'classic' ? '#999990' : '#0f172a';
         ctx.roundRect(8, 12, 28, 16, 8);
         ctx.fill();
 
         // Lever knob
-        ctx.fillStyle = isOn ? '#10b981' : '#64748b';
-        if (isOn) {
+        ctx.fillStyle = isOn ? '#10b981' : (theme === 'classic' ? '#666660' : '#64748b');
+        if (isOn && theme === 'dark') {
           ctx.shadowColor = '#10b981';
           ctx.shadowBlur = 6;
         }
@@ -359,7 +386,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         ctx.fill();
         ctx.shadowBlur = 0;
 
-        ctx.fillStyle = '#e2e8f0';
+        ctx.fillStyle = colors.textPrimary;
         ctx.font = '8px JetBrains Mono';
         ctx.textAlign = 'center';
         ctx.fillText(isOn ? 'ON' : 'OFF', 22, 36);
@@ -368,34 +395,33 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       case 'BUTTON': {
         const isPressed = gate.state.val === 1;
-        ctx.fillStyle = '#1e2433';
-        ctx.strokeStyle = '#475569';
-        ctx.lineWidth = 2;
-        ctx.roundRect(0, 0, width, height, 6);
+        ctx.fillStyle = theme === 'classic' ? '#dcdcd6' : '#1e2433';
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1.5;
+        ctx.roundRect(0, 0, width, height, 4);
         ctx.fill();
         ctx.stroke();
 
-        // Push button circle
-        ctx.fillStyle = isPressed ? '#3b82f6' : '#334155';
+        ctx.fillStyle = isPressed ? '#3b82f6' : (theme === 'classic' ? '#a0a098' : '#334155');
         ctx.beginPath();
         ctx.arc(width / 2, height / 2, isPressed ? 11 : 13, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = isPressed ? '#60a5fa' : '#475569';
+        ctx.strokeStyle = strokeCol;
         ctx.stroke();
         break;
       }
 
       case 'CLOCK': {
         const isHigh = gate.state.clockState === 1;
-        ctx.fillStyle = '#1e2433';
-        ctx.strokeStyle = '#475569';
-        ctx.lineWidth = 2;
-        ctx.roundRect(0, 0, width, height, 6);
+        ctx.fillStyle = theme === 'classic' ? '#dcdcd6' : '#1e2433';
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1.5;
+        ctx.roundRect(0, 0, width, height, 4);
         ctx.fill();
         ctx.stroke();
 
         // Pulse wave symbol
-        ctx.strokeStyle = isHigh ? '#10b981' : '#64748b';
+        ctx.strokeStyle = isHigh ? colors.wire1 : colors.wire0;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(10, 26);
@@ -406,7 +432,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         ctx.lineTo(34, 26);
         ctx.stroke();
 
-        ctx.fillStyle = isHigh ? '#10b981' : '#64748b';
+        ctx.fillStyle = isHigh ? colors.wire1 : colors.wire0;
         ctx.font = '8px JetBrains Mono';
         ctx.textAlign = 'center';
         ctx.fillText(`${gate.state.clockFreq || 1}Hz`, width / 2, 36);
@@ -415,22 +441,21 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       case 'DIP4': {
         const dipVal = Number(gate.state.val ?? 0);
-        ctx.fillStyle = '#1e293b';
-        ctx.strokeStyle = '#475569';
-        ctx.lineWidth = 2;
-        ctx.roundRect(0, 0, width, height, 6);
+        ctx.fillStyle = theme === 'classic' ? '#dcdcd6' : '#1e293b';
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1.5;
+        ctx.roundRect(0, 0, width, height, 4);
         ctx.fill();
         ctx.stroke();
 
-        // 4 mini switches
         for (let i = 0; i < 4; i++) {
           const bitOn = (dipVal & (1 << i)) !== 0;
           const y = 10 + i * 14;
-          ctx.fillStyle = '#0f172a';
+          ctx.fillStyle = theme === 'classic' ? '#a0a098' : '#0f172a';
           ctx.fillRect(15, y, 24, 10);
-          ctx.fillStyle = bitOn ? '#10b981' : '#64748b';
+          ctx.fillStyle = bitOn ? '#10b981' : (theme === 'classic' ? '#666660' : '#64748b');
           ctx.fillRect(bitOn ? 27 : 16, y + 1, 10, 8);
-          ctx.fillStyle = '#94a3b8';
+          ctx.fillStyle = colors.textSecondary;
           ctx.font = '8px JetBrains Mono';
           ctx.textAlign = 'left';
           ctx.fillText(`Q${i}`, 4, y + 8);
@@ -442,10 +467,10 @@ export const Canvas: React.FC<CanvasProps> = ({
         const isOn = gate.state.val === 1;
         const color = gate.state.color || '#10b981';
 
-        ctx.fillStyle = '#1e2433';
-        ctx.strokeStyle = '#475569';
-        ctx.lineWidth = 2;
-        ctx.roundRect(0, 0, width, height, 6);
+        ctx.fillStyle = theme === 'classic' ? '#dcdcd6' : '#1e2433';
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1.5;
+        ctx.roundRect(0, 0, width, height, 4);
         ctx.fill();
         ctx.stroke();
 
@@ -453,18 +478,20 @@ export const Canvas: React.FC<CanvasProps> = ({
         ctx.arc(width / 2, height / 2, 12, 0, Math.PI * 2);
         if (isOn) {
           ctx.fillStyle = color;
-          ctx.shadowColor = color;
-          ctx.shadowBlur = 12;
+          if (theme === 'dark') {
+            ctx.shadowColor = color;
+            ctx.shadowBlur = 12;
+          }
           ctx.fill();
           ctx.shadowBlur = 0;
         } else {
-          ctx.fillStyle = '#1e293b';
+          ctx.fillStyle = theme === 'classic' ? '#e6e6fa' : '#1e293b';
           ctx.fill();
-          ctx.strokeStyle = '#334155';
+          ctx.strokeStyle = strokeCol;
           ctx.stroke();
         }
 
-        ctx.fillStyle = '#e2e8f0';
+        ctx.fillStyle = colors.textPrimary;
         ctx.font = '8px JetBrains Mono';
         ctx.textAlign = 'center';
         ctx.fillText(gate.name || 'LED', width / 2, height - 2);
@@ -474,16 +501,15 @@ export const Canvas: React.FC<CanvasProps> = ({
       case 'SEVEN_SEG': {
         const val = Number(gate.state.val ?? 0);
         ctx.fillStyle = '#0f172a';
-        ctx.strokeStyle = '#334155';
-        ctx.lineWidth = 2;
-        ctx.roundRect(0, 0, width, height, 6);
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1.5;
+        ctx.roundRect(0, 0, width, height, 4);
         ctx.fill();
         ctx.stroke();
 
-        // 7 segments layout
         renderSevenSegment(ctx, 16, 12, 28, 48, val);
 
-        ctx.fillStyle = '#64748b';
+        ctx.fillStyle = '#94a3b8';
         ctx.font = '9px JetBrains Mono';
         ctx.textAlign = 'center';
         ctx.fillText('0x' + val.toString(16).toUpperCase(), width / 2, height - 6);
@@ -493,9 +519,9 @@ export const Canvas: React.FC<CanvasProps> = ({
       case 'HEX_DISP': {
         const val = Number(gate.state.val ?? 0);
         ctx.fillStyle = '#0f172a';
-        ctx.strokeStyle = '#334155';
-        ctx.lineWidth = 2;
-        ctx.roundRect(0, 0, width, height, 6);
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1.5;
+        ctx.roundRect(0, 0, width, height, 4);
         ctx.fill();
         ctx.stroke();
 
@@ -512,13 +538,12 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       case 'TTY': {
         ctx.fillStyle = '#090d16';
-        ctx.strokeStyle = '#334155';
-        ctx.lineWidth = 2;
-        ctx.roundRect(0, 0, width, height, 6);
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1.5;
+        ctx.roundRect(0, 0, width, height, 4);
         ctx.fill();
         ctx.stroke();
 
-        // CRT scanline header
         ctx.fillStyle = '#1e293b';
         ctx.fillRect(2, 2, width - 4, 16);
         ctx.fillStyle = '#38bdf8';
@@ -526,7 +551,6 @@ export const Canvas: React.FC<CanvasProps> = ({
         ctx.textAlign = 'left';
         ctx.fillText('TkGate TTY Terminal', 8, 13);
 
-        // Terminal text
         ctx.fillStyle = '#10b981';
         ctx.font = '10px JetBrains Mono, monospace';
         const txt = gate.state.ttyText || 'READY>';
@@ -538,15 +562,15 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
 
       case 'COMMENT': {
-        ctx.fillStyle = '#1e293b';
-        ctx.strokeStyle = '#64748b';
+        ctx.fillStyle = theme === 'classic' ? '#ffffd0' : '#1e293b';
+        ctx.strokeStyle = strokeCol;
         ctx.setLineDash([3, 3]);
         ctx.roundRect(0, 0, width, height, 4);
         ctx.fill();
         ctx.stroke();
         ctx.setLineDash([]);
 
-        ctx.fillStyle = '#cbd5e1';
+        ctx.fillStyle = colors.textPrimary;
         ctx.font = '10px Inter, sans-serif';
         ctx.textAlign = 'left';
         const lines = (gate.state.commentText || gate.name || 'Note').split('\n');
@@ -557,20 +581,19 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
 
       default: {
-        // Generic chip representation
-        ctx.fillStyle = '#1e2433';
-        ctx.strokeStyle = '#475569';
-        ctx.lineWidth = 2;
-        ctx.roundRect(0, 0, width, height, 6);
+        ctx.fillStyle = bodyFill;
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1.5;
+        ctx.roundRect(0, 0, width, height, 4);
         ctx.fill();
         ctx.stroke();
 
-        ctx.fillStyle = '#f8fafc';
+        ctx.fillStyle = colors.textPrimary;
         ctx.font = 'bold 11px JetBrains Mono';
         ctx.textAlign = 'center';
         ctx.fillText(meta.label || gate.type, width / 2, height / 2 - 4);
 
-        ctx.fillStyle = '#94a3b8';
+        ctx.fillStyle = colors.textSecondary;
         ctx.font = '9px JetBrains Mono';
         ctx.fillText(gate.name || '', width / 2, height / 2 + 12);
         break;
@@ -578,7 +601,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
   }
 
-  // Helper to draw 7-segment display
   function renderSevenSegment(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, val: number) {
     const segMap: Record<number, boolean[]> = {
       0: [true, true, true, true, true, true, false],
@@ -591,17 +613,17 @@ export const Canvas: React.FC<CanvasProps> = ({
       7: [true, true, true, false, false, false, false],
       8: [true, true, true, true, true, true, true],
       9: [true, true, true, true, false, true, true],
-      10: [true, true, true, false, true, true, true], // A
-      11: [false, false, true, true, true, true, true], // b
-      12: [true, false, false, true, true, true, false], // C
-      13: [false, true, true, true, true, false, true], // d
-      14: [true, false, false, true, true, true, true], // E
-      15: [true, false, false, false, true, true, true], // F
+      10: [true, true, true, false, true, true, true],
+      11: [false, false, true, true, true, true, true],
+      12: [true, false, false, true, true, true, false],
+      13: [false, true, true, true, true, false, true],
+      14: [true, false, false, true, true, true, true],
+      15: [true, false, false, false, true, true, true],
     };
 
     const segs = segMap[val & 0x0F] || segMap[0];
     const offColor = '#1e293b';
-    const onColor = '#ef4444'; // Red LED segments
+    const onColor = '#ef4444';
 
     const drawSeg = (active: boolean, sx: number, sy: number, sw: number, sh: number) => {
       ctx.fillStyle = active ? onColor : offColor;
@@ -613,17 +635,16 @@ export const Canvas: React.FC<CanvasProps> = ({
       ctx.shadowBlur = 0;
     };
 
-    const t = 4; // thickness
-    drawSeg(segs[0], x + t, y, w - t * 2, t); // a (top)
-    drawSeg(segs[1], x + w - t, y + t, t, h / 2 - t); // b (top right)
-    drawSeg(segs[2], x + w - t, y + h / 2, t, h / 2 - t); // c (bottom right)
-    drawSeg(segs[3], x + t, y + h - t, w - t * 2, t); // d (bottom)
-    drawSeg(segs[4], x, y + h / 2, t, h / 2 - t); // e (bottom left)
-    drawSeg(segs[5], x, y + t, t, h / 2 - t); // f (top left)
-    drawSeg(segs[6], x + t, y + h / 2 - t / 2, w - t * 2, t); // g (middle)
+    const t = 4;
+    drawSeg(segs[0], x + t, y, w - t * 2, t);
+    drawSeg(segs[1], x + w - t, y + t, t, h / 2 - t);
+    drawSeg(segs[2], x + w - t, y + h / 2, t, h / 2 - t);
+    drawSeg(segs[3], x + t, y + h - t, w - t * 2, t);
+    drawSeg(segs[4], x, y + h / 2, t, h / 2 - t);
+    drawSeg(segs[5], x, y + t, t, h / 2 - t);
+    drawSeg(segs[6], x + t, y + h / 2 - t / 2, w - t * 2, t);
   }
 
-  // Draw input & output pins on gate
   function renderPins(ctx: CanvasRenderingContext2D, gate: Gate) {
     const allPins = [...gate.inputs, ...gate.outputs];
 
@@ -634,8 +655,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       ctx.arc(pin.relX, pin.relY, 3.5, 0, Math.PI * 2);
       ctx.fill();
 
-      // Pin label
-      ctx.fillStyle = '#64748b';
+      ctx.fillStyle = colors.textSecondary;
       ctx.font = '8px JetBrains Mono';
       ctx.textAlign = isOutput ? 'right' : 'left';
       ctx.fillText(pin.name, pin.relX + (isOutput ? -6 : 6), pin.relY + 3);
@@ -657,13 +677,29 @@ export const Canvas: React.FC<CanvasProps> = ({
       return;
     }
 
-    // Placing a new gate
     if (pendingGateType) {
       onPlaceGate(pendingGateType, snap(world.x), snap(world.y));
       return;
     }
 
-    // Check if clicked on a Gate's interactive control (e.g. switch or button)
+    // Double click to open gate properties
+    if (e.detail === 2) {
+      for (const gate of circuit.gates) {
+        const meta = GATE_CATALOG[gate.type] || GATE_CATALOG.AND;
+        if (
+          world.x >= gate.x &&
+          world.x <= gate.x + meta.width &&
+          world.y >= gate.y &&
+          world.y <= gate.y + meta.height
+        ) {
+          onSelectGate(gate.id);
+          if (onOpenProperties) onOpenProperties();
+          return;
+        }
+      }
+    }
+
+    // Check click on interactive control
     for (const gate of circuit.gates) {
       const meta = GATE_CATALOG[gate.type] || GATE_CATALOG.AND;
       if (
@@ -673,21 +709,18 @@ export const Canvas: React.FC<CanvasProps> = ({
         world.y <= gate.y + meta.height
       ) {
         if (gate.type === 'SWITCH') {
-          // Toggle switch
           const updatedGates = circuit.gates.map(g =>
             g.id === gate.id ? { ...g, state: { ...g.state, val: g.state.val === 1 ? 0 : 1 } } : g
           );
           onUpdateCircuit({ ...circuit, gates: updatedGates });
           return;
         } else if (gate.type === 'BUTTON') {
-          // Press button
           const updatedGates = circuit.gates.map(g =>
             g.id === gate.id ? { ...g, state: { ...g.state, val: 1 } } : g
           );
           onUpdateCircuit({ ...circuit, gates: updatedGates });
           return;
         } else if (gate.type === 'DIP4') {
-          // Toggle the specific dip switch clicked
           const relY = world.y - gate.y;
           const bitIndex = Math.min(3, Math.max(0, Math.floor((relY - 6) / 14)));
           const current = Number(gate.state.val ?? 0);
@@ -701,7 +734,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
     }
 
-    // Check if clicked on a pin (start wiring or finish wiring)
+    // Check click on pins
     for (const gate of circuit.gates) {
       const allPins = [...gate.inputs, ...gate.outputs];
       for (const pin of allPins) {
@@ -709,7 +742,6 @@ export const Canvas: React.FC<CanvasProps> = ({
         const dist = Math.hypot(world.x - pinPos.x, world.y - pinPos.y);
         if (dist <= 8) {
           if (!wiringStart) {
-            // Start wiring from this pin
             setWiringStart({
               gateId: gate.id,
               pinId: pin.id,
@@ -717,7 +749,6 @@ export const Canvas: React.FC<CanvasProps> = ({
               y: pinPos.y,
             });
           } else {
-            // Complete wiring if different gates
             if (wiringStart.gateId !== gate.id) {
               const newWire: Wire = {
                 id: `wire_${Date.now()}`,
@@ -741,7 +772,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
     }
 
-    // Check if clicked on a gate to select or drag
+    // Check click on gate
     for (let i = circuit.gates.length - 1; i >= 0; i--) {
       const gate = circuit.gates[i];
       const meta = GATE_CATALOG[gate.type] || GATE_CATALOG.AND;
@@ -752,7 +783,6 @@ export const Canvas: React.FC<CanvasProps> = ({
         world.y <= gate.y + meta.height
       ) {
         if (activeTool === 'delete') {
-          // Delete gate and connected wires
           const newGates = circuit.gates.filter(g => g.id !== gate.id);
           const newWires = circuit.wires.filter(w => w.fromGateId !== gate.id && w.toGateId !== gate.id);
           onUpdateCircuit({ ...circuit, gates: newGates, wires: newWires });
@@ -768,7 +798,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
     }
 
-    // Check if clicked on a wire
+    // Check click on wire
     for (const wire of circuit.wires) {
       const fromGate = circuit.gates.find(g => g.id === wire.fromGateId);
       const toGate = circuit.gates.find(g => g.id === wire.toGateId);
@@ -781,7 +811,6 @@ export const Canvas: React.FC<CanvasProps> = ({
       const p2 = getPinPos(toGate, toPin);
       const midX = (p1.x + p2.x) / 2;
 
-      // Approximate hit test on orthogonal wire
       const d1 = Math.abs(world.y - p1.y) < 6 && world.x >= Math.min(p1.x, midX) - 4 && world.x <= Math.max(p1.x, midX) + 4;
       const d2 = Math.abs(world.x - midX) < 6 && world.y >= Math.min(p1.y, p2.y) - 4 && world.y <= Math.max(p1.y, p2.y) + 4;
       const d3 = Math.abs(world.y - p2.y) < 6 && world.x >= Math.min(midX, p2.x) - 4 && world.x <= Math.max(midX, p2.x) + 4;
@@ -801,7 +830,6 @@ export const Canvas: React.FC<CanvasProps> = ({
       }
     }
 
-    // Clicked empty background
     onSelectGate(null);
     onSelectWire(null);
     if (wiringStart) setWiringStart(null);
@@ -815,6 +843,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     const sy = e.clientY - rect.top;
     const world = screenToWorld(sx, sy);
     setMousePos(world);
+    if (onCursorMove) onCursorMove(world);
 
     if (isPanning) {
       setOffset({
@@ -838,7 +867,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     setIsPanning(false);
     setDraggingGateId(null);
 
-    // If button was pressed, release it
     const hasPressedButton = circuit.gates.some(g => g.type === 'BUTTON' && g.state.val === 1);
     if (hasPressedButton) {
       const updatedGates = circuit.gates.map(g =>
@@ -848,7 +876,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
-  // Zoom with scroll wheel
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
@@ -881,10 +908,10 @@ export const Canvas: React.FC<CanvasProps> = ({
         onWheel={handleWheel}
       />
       {/* Floating Canvas Controls */}
-      <div className="absolute bottom-4 right-4 flex items-center space-x-1.5 bg-[#1e222b]/90 backdrop-blur-md border border-[#3d4455] rounded-lg px-2 py-1 shadow-lg text-xs font-mono text-slate-300">
+      <div className="absolute bottom-3 right-3 flex items-center space-x-1.5 bg-[#1e222b]/90 backdrop-blur-md border border-[#3d4455] rounded px-2 py-1 shadow-lg text-xs font-mono text-slate-300">
         <button
           onClick={() => setZoom(z => Math.min(3.0, z * 1.2))}
-          className="p-1.5 hover:bg-slate-700 rounded transition"
+          className="p-1 hover:bg-slate-700 rounded transition"
           title="Zoom In (+)"
         >
           +
@@ -892,16 +919,16 @@ export const Canvas: React.FC<CanvasProps> = ({
         <span className="px-1 text-slate-400">{Math.round(zoom * 100)}%</span>
         <button
           onClick={() => setZoom(z => Math.max(0.3, z / 1.2))}
-          className="p-1.5 hover:bg-slate-700 rounded transition"
+          className="p-1 hover:bg-slate-700 rounded transition"
           title="Zoom Out (-)"
         >
           -
         </button>
-        <div className="w-[1px] h-4 bg-slate-700 mx-1" />
+        <div className="w-[1px] h-3 bg-slate-700 mx-1" />
         <button
-          onClick={() => { setZoom(1.0); setOffset({ x: 40, y: 40 }); }}
-          className="p-1.5 hover:bg-slate-700 rounded transition"
-          title="Reset View"
+          onClick={() => { setZoom(1.0); setOffset({ x: 60, y: 60 }); }}
+          className="p-1 hover:bg-slate-700 rounded transition"
+          title="Reset View (1:1)"
         >
           1:1
         </button>
